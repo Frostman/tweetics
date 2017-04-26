@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 
-# based on https://github.com/JasonSanchez/spark-streaming-twitter-kafka/blob/master/spark-stream-tweets.py
-
 import json
 import sys
 
@@ -10,38 +8,21 @@ from pyspark import streaming
 from pyspark.streaming import kafka
 
 
-def get_people_with_hashtags(tweet):
+def get_hashtags(tweet):
     data = json.loads(tweet)
-    try:
-        hashtags = ["#" + hashtag["text"] for hashtag in data['entities']['hashtags']]
-        if not hashtags:
-            return ()
-        author = data['user']['screen_name']
-        mentions = ["@" + user["screen_name"] for user in data['entities']['user_mentions']]
-        people = mentions + [author]
-        return (people, hashtags)
-    except KeyError:
-        return ()
-
-
-def filter_out_unicode(x):
+    data_hashtags = data.get("entities", {}).get("hashtags", [])
     hashtags = []
-    for hashtag in x[1]:
+
+    for hashtag in data_hashtags:
+        # filter out unicode
         try:
-            hashtags.append(str(hashtag))
-        except UnicodeEncodeError:
+            hashtags.append(str("#" + hashtag["text"]))
+        except (UnicodeEncodeError, KeyError):
             pass
-    return (x[0], hashtags)
 
+    import pdb; pdb.set_trace()
 
-def flatten(x):
-    all_combinations = []
-    for person in x[0]: # people
-        for hashtag in x[1]: # hashtags
-            main_author_flag = 0 if "@" in person else 1
-            all_combinations.append((hashtag, (main_author_flag, {person})))
-
-    return all_combinations
+    return hashtags
 
 
 if __name__ == "__main__":
@@ -66,23 +47,13 @@ if __name__ == "__main__":
     sc = pyspark.SparkContext("local[2]", appName="TweeTics")
     ssc = streaming.StreamingContext(sc, batch_duration)
 
-    tweets = kafka.KafkaUtils.createStream(ssc, zk_quorum, "tweetics-consumer", {topic_name: 1})
+    tweets = kafka.KafkaUtils.createStream(ssc, zk_quorum, "tweetics-consumer", {topic_name: 1}).map(lambda x: x[1])
+    counts = tweets.flatMap(get_hashtags).map(lambda hashtag: (hashtag, 1)).reduceByKey(lambda a, b: a + b)
+    sorted_counts = counts.transform(lambda rdd: rdd.sortByKey(ascending=False, keyfunc=lambda x: x[1]))
+    output = sorted_counts.map(lambda x: "%s %s" % (x[0], x[1]))
 
-    # tweet -> Kafka -> Spark -> parse json -> ([people], [hashtags])
-    #    (w/o unicode and filter out unused hashtags)
-    # -> flatten to (hashtag, (main_author, {person}))
-    # -> reduce by hashtags to list of authors and count of tweets
-    #    (filtered out hashtags with less then specified count)
-
-    lines = tweets.map(lambda x: get_people_with_hashtags(x[1])).filter(lambda x: len(x) > 0)
-    hashtags = lines.map(filter_out_unicode)
-    flat_hashtags = hashtags.flatMap(flatten)
-    hash_tag_authors_and_counts = flat_hashtags.reduceByKey(lambda a, b: (a[0] + b[0], a[1] | b[1]))
-    top_hashtags = hash_tag_authors_and_counts.filter(lambda x: x[1][0] >= min_hashtag_counts)
-    top_hashtags = top_hashtags.transform(lambda rdd: rdd.sortByKey(ascending=False, keyfunc=lambda x: x[1][0]))
-
-    top_hashtags.pprint()
-    top_hashtags.saveAsTextFiles(save_to)
+    output.pprint()
+    output.saveAsTextFiles(save_to)
 
     ssc.start()
     ssc.awaitTermination()
