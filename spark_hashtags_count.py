@@ -20,8 +20,6 @@ def get_hashtags(tweet):
         except (UnicodeEncodeError, KeyError):
             pass
 
-    import pdb; pdb.set_trace()
-
     return hashtags
 
 
