@@ -16,7 +16,7 @@ def get_hashtags(tweet):
     for hashtag in data_hashtags:
         # filter out unicode
         try:
-            hashtags.append(str("#" + hashtag["text"]))
+            hashtags.append(str("#" + hashtag["text"]).lower())
         except (UnicodeEncodeError, KeyError):
             pass
 
